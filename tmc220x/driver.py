@@ -1,10 +1,15 @@
 from machine import Pin
 import math
+from micropython import const
 from . import registers
 import time
 from .uart import TMC_UART
 import uasyncio
 from .utils import set_bit, clear_bit, Enum
+
+# ((2^32) - 1) / 2
+# I would've expected ticks_us to not be signed, but it's treated as a signed int
+ticks_us_upper_bound = const(1073741823)
 
 def mean(obj: list):
     return sum(obj) / len(obj)
@@ -531,26 +536,27 @@ class TMC220X(object):
             self._speed = -self._speed
 
     def runSpeed(self):
-        if (not self._stepInterval):
+        if not self._stepInterval:
             return False
-        
-        curtime = time.ticks_us()
-        
-        if (curtime - self._lastStepTime >= self._stepInterval):
+        if self.getStepDelta() >= self._stepInterval:
             if not self._stop:
-                if (self._direction == 1): # Clockwise
+                if self._direction == 1: # Clockwise
                     self._currentPos += 1
                 else: # Anticlockwise 
                     self._currentPos -= 1
                 self.makeAStep()
-                
-                self._lastStepTime = curtime # Caution: does not account for costs in step()
+                self._lastStepTime = time.ticks_us()
                 return True
-        else:
-            return False
+        return False
         
     def makeAStep(self):
         self.pin_step.on()
         time.sleep_us(1)
         self.pin_step.off()
         time.sleep_us(10)
+
+    def getStepDelta(self):
+        if time.ticks_us() <= self._lastStepTime: # we hit wrap-around condition
+            return time.ticks_us() - (self._lastStepTime - ticks_us_upper_bound)
+        else:
+            return time.ticks_us() - self._lastStepTime
